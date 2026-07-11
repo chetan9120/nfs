@@ -1,0 +1,26 @@
+# Postgres for this project runs on a shared remote server, not locally via Docker —
+# see CLAUDE.md's "Dev Environment Notes" and apps/api/.env.example for connection details.
+# The service below is kept for reference in case we go back to a local/dockerized Postgres
+# in a later phase; it is not used for local dev right now.
+
+# services:
+#   postgres:
+#     image: postgres:16-alpine
+#     container_name: nfs-postgres
+#     restart: unless-stopped
+#     environment:
+#       POSTGRES_USER: nfs
+#       POSTGRES_PASSWORD: nfs_dev_password
+#       POSTGRES_DB: nfs
+#     ports:
+#       - '5432:5432'
+#     volumes:
+#       - nfs_postgres_data:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ['CMD-SHELL', 'pg_isready -U nfs -d nfs']
+#       interval: 5s
+#       timeout: 5s
+#       retries: 10
+#
+# volumes:
+#   nfs_postgres_data:

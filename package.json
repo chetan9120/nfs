@@ -1,0 +1,30 @@
+{
+  "name": "nfs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Narvee File Share OS — monorepo root",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @nfs/web",
+    "dev:api": "npm run dev -w @nfs/api",
+    "build": "npm run build -ws --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.18",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.19.1"
+  }
+}

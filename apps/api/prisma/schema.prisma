@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DeviceType {
+  WEB
+  DESKTOP
+  MOBILE
+}
+
+enum StorageProviderType {
+  LOCAL_DISK
+}
+
+enum ParticipantRole {
+  OWNER
+  RECIPIENT
+}
+
+enum MessageType {
+  TEXT
+  SYSTEM
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  devices              Device[]
+  uploadedFiles        File[]
+  participants         ConversationParticipant[]
+  messages             Message[]
+  sentInvites          Invite[]                   @relation("InvitesSent")
+  claimedInvites       Invite[]                   @relation("InvitesClaimed")
+}
+
+model Device {
+  id                    String     @id @default(uuid())
+  userId                String
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  type                  DeviceType @default(WEB)
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+  lastSeenAt            DateTime   @default(now())
+  createdAt             DateTime   @default(now())
+}
+
+model File {
+  id           String   @id @default(uuid())
+  hash         String   @unique
+  size         Int
+  mimeType     String
+  originalName String
+  uploaderId   String
+  uploader     User     @relation(fields: [uploaderId], references: [id])
+  createdAt    DateTime @default(now())
+
+  locations    FileLocation[]
+  conversation Conversation?
+}
+
+model FileLocation {
+  id         String              @id @default(uuid())
+  fileId     String
+  file       File                @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  provider   StorageProviderType
+  storageKey String
+  createdAt  DateTime            @default(now())
+
+  @@unique([fileId, provider])
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  fileId    String   @unique
+  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+  invites      Invite[]
+}
+
+model ConversationParticipant {
+  id             String          @id @default(uuid())
+  conversationId String
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           ParticipantRole
+  createdAt      DateTime        @default(now())
+
+  @@unique([conversationId, userId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id])
+  body           String
+  type           MessageType  @default(TEXT)
+  createdAt      DateTime     @default(now())
+}
+
+model Invite {
+  id              String       @id @default(uuid())
+  email           String
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  invitedById     String
+  invitedBy       User         @relation("InvitesSent", fields: [invitedById], references: [id])
+  claimedById     String?
+  claimedBy       User?        @relation("InvitesClaimed", fields: [claimedById], references: [id])
+  claimedAt       DateTime?
+  createdAt       DateTime     @default(now())
+
+  @@unique([email, conversationId])
+}
