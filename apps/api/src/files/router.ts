@@ -3,6 +3,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/requireAuth.js';
+import { emitToUsers } from '../realtime/socket.js';
 import { storageKeyForHash, storageProvider } from '../storage/index.js';
 
 const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
@@ -10,8 +11,65 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 
 export const filesRouter = Router();
 
+const STATUS_RANK: Record<string, number> = { PENDING: 0, DELIVERED: 1, OPENED: 2, DOWNLOADED: 3 };
+
 function isValidEmail(email: unknown): email is string {
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+const conversationInclude = {
+  file: true,
+  participants: { include: { user: { select: { id: true, email: true, displayName: true } } } },
+  invites: true,
+  messages: { orderBy: { createdAt: 'asc' as const } },
+};
+
+async function fetchConversation(conversationId: string) {
+  return prisma.conversation.findUnique({ where: { id: conversationId }, include: conversationInclude });
+}
+
+function participantIds(conversation: { participants: { userId: string }[] }): string[] {
+  return conversation.participants.map((p) => p.userId);
+}
+
+// Advances a participant's status forward only (PENDING -> DELIVERED -> OPENED -> DOWNLOADED), never regresses.
+async function advanceParticipantStatus(
+  conversationId: string,
+  userId: string,
+  target: 'DELIVERED' | 'OPENED' | 'DOWNLOADED',
+) {
+  const participant = await prisma.conversationParticipant.findUnique({
+    where: { conversationId_userId: { conversationId, userId } },
+  });
+  if (!participant || STATUS_RANK[participant.status] >= STATUS_RANK[target]) {
+    return participant;
+  }
+
+  const timestampField = target === 'DELIVERED' ? 'deliveredAt' : target === 'OPENED' ? 'openedAt' : 'downloadedAt';
+  const updated = await prisma.conversationParticipant.update({
+    where: { conversationId_userId: { conversationId, userId } },
+    data: { status: target, [timestampField]: new Date() },
+  });
+
+  const conversation = await fetchConversation(conversationId);
+  if (conversation) {
+    emitToUsers(participantIds(conversation), 'status_changed', {
+      conversationId,
+      userId,
+      status: updated.status,
+      deliveredAt: updated.deliveredAt,
+      openedAt: updated.openedAt,
+      downloadedAt: updated.downloadedAt,
+    });
+  }
+
+  return updated;
+}
+
+async function requireParticipant(conversationId: string, userId: string) {
+  return prisma.conversationParticipant.findUnique({
+    where: { conversationId_userId: { conversationId, userId } },
+  });
 }
 
 filesRouter.post(
@@ -76,7 +134,13 @@ filesRouter.post(
     if (recipientUser) {
       await prisma.conversationParticipant.upsert({
         where: { conversationId_userId: { conversationId: conversation.id, userId: recipientUser.id } },
-        create: { conversationId: conversation.id, userId: recipientUser.id, role: 'RECIPIENT' },
+        create: {
+          conversationId: conversation.id,
+          userId: recipientUser.id,
+          role: 'RECIPIENT',
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+        },
         update: {},
       });
       recipientStatus = 'existing_user';
@@ -105,6 +169,25 @@ filesRouter.post(
       });
     }
 
+    const fullConversation = await fetchConversation(conversation.id);
+
+    if (fullConversation) {
+      const recipientIds = recipientUser ? [recipientUser.id] : [];
+      if (recipientIds.length > 0) {
+        emitToUsers(recipientIds, 'file_received', { conversation: fullConversation });
+        emitToUsers(recipientIds, 'status_changed', {
+          conversationId: conversation.id,
+          userId: recipientUser!.id,
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+        });
+      }
+      emitToUsers(participantIds(fullConversation), 'message_added', {
+        conversationId: conversation.id,
+        messages: fullConversation.messages,
+      });
+    }
+
     res.status(201).json({
       file: {
         id: fileRecord.id,
@@ -114,7 +197,7 @@ filesRouter.post(
         originalName: fileRecord.originalName,
         deduplicated: Boolean(existingLocation),
       },
-      conversation: { id: conversation.id },
+      conversation: fullConversation,
       recipient: { email: recipientEmail, status: recipientStatus },
       message: systemMessage,
     });
@@ -126,14 +209,89 @@ filesRouter.get('/conversations/mine', requireAuth, async (req: AuthenticatedReq
 
   const conversations = await prisma.conversation.findMany({
     where: { participants: { some: { userId } } },
-    include: {
-      file: true,
-      participants: { include: { user: { select: { id: true, email: true, displayName: true } } } },
-      invites: true,
-      messages: { orderBy: { createdAt: 'asc' } },
-    },
+    include: conversationInclude,
     orderBy: { createdAt: 'desc' },
   });
 
   res.json({ conversations });
+});
+
+filesRouter.get('/conversations/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const userId = req.userId!;
+  const { id } = req.params;
+
+  const participant = await requireParticipant(id, userId);
+  if (!participant) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return;
+  }
+
+  await advanceParticipantStatus(id, userId, 'OPENED');
+
+  const conversation = await fetchConversation(id);
+  res.json({ conversation });
+});
+
+filesRouter.post('/conversations/:id/messages', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const userId = req.userId!;
+  const { id } = req.params;
+  const { body } = req.body ?? {};
+
+  const participant = await requireParticipant(id, userId);
+  if (!participant) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return;
+  }
+  if (typeof body !== 'string' || body.trim().length === 0) {
+    res.status(400).json({ error: 'body is required' });
+    return;
+  }
+
+  await prisma.message.create({
+    data: { conversationId: id, senderId: userId, type: 'TEXT', body },
+  });
+
+  const conversation = await fetchConversation(id);
+  if (conversation) {
+    emitToUsers(participantIds(conversation), 'message_added', {
+      conversationId: id,
+      messages: conversation.messages,
+    });
+  }
+
+  res.status(201).json({ conversation });
+});
+
+filesRouter.get('/files/:fileId/download', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const userId = req.userId!;
+  const { fileId } = req.params;
+
+  const file = await prisma.file.findUnique({
+    where: { id: fileId },
+    include: { conversation: true, locations: true },
+  });
+  if (!file || !file.conversation) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+
+  const participant = await requireParticipant(file.conversation.id, userId);
+  if (!participant) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+
+  const location = file.locations.find((l) => l.provider === 'LOCAL_DISK');
+  if (!location) {
+    res.status(404).json({ error: 'File content not available' });
+    return;
+  }
+
+  const buffer = await storageProvider.get(location.storageKey);
+
+  await advanceParticipantStatus(file.conversation.id, userId, 'DOWNLOADED');
+
+  res.setHeader('Content-Type', file.mimeType);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+  res.send(buffer);
 });

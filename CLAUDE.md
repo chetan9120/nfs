@@ -74,7 +74,7 @@ We are building this in phases. **Do not jump ahead to a later phase's features 
 
 - [x] **Phase 0** — Monorepo setup (React/TS/Tailwind frontend, Node/TS/Postgres backend)
 - [x] **Phase 1** — Foundation: auth, core schema (User, Device, File, Conversation, Message)
-- [ ] **Phase 2** — Core communication loop: send file → Inbox → Conversation thread → real-time via WebSockets
+- [x] **Phase 2** — Core communication loop: send file → Inbox → Conversation thread → real-time via WebSockets
 - [ ] **Phase 3** — Local-first layer: desktop agent, SQLite cache, offline mode, delta sync
 - [ ] **Phase 4** — Device & storage intelligence: device enrollment, dedup via hashing, storage routing
 - [ ] **Phase 5** — Enterprise layer: Workspaces, RBAC, audit logs

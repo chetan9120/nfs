@@ -1,9 +1,11 @@
 import 'dotenv/config';
+import http from 'node:http';
 import cors from 'cors';
 import express from 'express';
 import type { HealthCheckResponse } from '@nfs/shared';
 import { authRouter } from './auth/router.js';
 import { filesRouter } from './files/router.js';
+import { initRealtime } from './realtime/socket.js';
 
 const app = express();
 const port = Number(process.env.PORT) || 4000;
@@ -23,6 +25,9 @@ app.get('/api/health', (_req, res) => {
   res.json(body);
 });
 
-app.listen(port, () => {
+const httpServer = http.createServer(app);
+initRealtime(httpServer);
+
+httpServer.listen(port, () => {
   console.log(`[nfs-api] hello world — listening on http://localhost:${port}`);
 });
