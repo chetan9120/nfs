@@ -4,6 +4,7 @@ build
 .env
 .env.local
 *.local
+.neon
 
 # Editor
 .vscode/*
