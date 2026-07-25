@@ -204,6 +204,38 @@ filesRouter.post(
   },
 );
 
+// Delta sync for offline-first clients (the desktop agent): returns only conversations
+// touched since the given cursor — new conversations, new messages, or participant
+// status changes — instead of the full `mine` list every poll.
+filesRouter.get('/sync/updates', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const userId = req.userId!;
+  const sinceParam = req.query.since;
+  const since =
+    typeof sinceParam === 'string' && !Number.isNaN(Date.parse(sinceParam)) ? new Date(sinceParam) : new Date(0);
+  const serverTime = new Date();
+
+  const conversations = await prisma.conversation.findMany({
+    where: {
+      participants: { some: { userId } },
+      OR: [
+        { createdAt: { gt: since } },
+        { messages: { some: { createdAt: { gt: since } } } },
+        {
+          participants: {
+            some: {
+              OR: [{ deliveredAt: { gt: since } }, { openedAt: { gt: since } }, { downloadedAt: { gt: since } }],
+            },
+          },
+        },
+      ],
+    },
+    include: conversationInclude,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  res.json({ conversations, serverTime: serverTime.toISOString() });
+});
+
 filesRouter.get('/conversations/mine', requireAuth, async (req: AuthenticatedRequest, res) => {
   const userId = req.userId!;
 
@@ -235,7 +267,7 @@ filesRouter.get('/conversations/:id', requireAuth, async (req: AuthenticatedRequ
 filesRouter.post('/conversations/:id/messages', requireAuth, async (req: AuthenticatedRequest, res) => {
   const userId = req.userId!;
   const { id } = req.params;
-  const { body } = req.body ?? {};
+  const { body, clientId } = req.body ?? {};
 
   const participant = await requireParticipant(id, userId);
   if (!participant) {
@@ -247,8 +279,22 @@ filesRouter.post('/conversations/:id/messages', requireAuth, async (req: Authent
     return;
   }
 
+  const hasClientId = typeof clientId === 'string' && clientId.length > 0;
+
+  // Lets an offline-queued send be safely retried after an ambiguous network
+  // failure (e.g. the server received it but the response was lost) — replaying
+  // the same clientId is a no-op instead of creating a duplicate message.
+  if (hasClientId) {
+    const existing = await prisma.message.findUnique({ where: { clientId } });
+    if (existing) {
+      const conversation = await fetchConversation(id);
+      res.status(200).json({ conversation, deduplicated: true });
+      return;
+    }
+  }
+
   await prisma.message.create({
-    data: { conversationId: id, senderId: userId, type: 'TEXT', body },
+    data: { conversationId: id, senderId: userId, type: 'TEXT', body, clientId: hasClientId ? clientId : undefined },
   });
 
   const conversation = await fetchConversation(id);
@@ -259,7 +305,7 @@ filesRouter.post('/conversations/:id/messages', requireAuth, async (req: Authent
     });
   }
 
-  res.status(201).json({ conversation });
+  res.status(201).json({ conversation, deduplicated: false });
 });
 
 filesRouter.get('/files/:fileId/download', requireAuth, async (req: AuthenticatedRequest, res) => {

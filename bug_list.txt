@@ -1,0 +1,77 @@
+NFS AUDIT - BUG LIST
+Tested build: http://107.131.98.14:6001/
+Tested as: srm.rao@gmail.com
+
+BUG001
+Title: Send-a-file-to-a-person works end to end on the backend (via Transfers), but every UI control for it is unwired
+Severity: Critical
+Details: My Files empty state says "Upload from the desktop app or drag files in," but there is no upload button, no file input, and no drag-drop handler anywhere in the DOM - confirmed with "Show planned features" enabled too, so it is not feature-flag-gated, it is simply not wired up in the frontend.
+Tested directly against the API (bypassing the UI) to separate "missing button" from "missing feature":
+- POST /d-vault/files/upload -> 200 OK, "Upload completed", file appears correctly in My Files afterward with working Download/Rename/Delete/Star.
+- POST /d-vault/transfers with body {fileId, recipientEmail} -> 200 OK, "Transfer created", record appears live on the Transfers screen (status QUEUED, route LAN, recipient email shown).
+- POST /d-vault/transfers/{id}/progress?progressPct=25 (query param, not JSON body) -> 200 OK, "Progress updated", status flips to ACTIVE with correct percentage.
+- POST /d-vault/transfers/{id}/cancel -> 200 OK, "Transfer cancelled".
+- The dedicated share/outbox-style endpoints (/d-vault/files/{id}/share, /d-vault/shares, /d-vault/share/create, /d-vault/outbox, etc.) all return 404 - Transfers, not Share, is the real "send to a person" mechanism in this backend.
+Conclusion: the entire send pipeline (upload -> create transfer to a recipient email -> track progress -> cancel) is fully functional server-side. The gap is 100% frontend: the "+ New transfer" button (Transfers), the file upload control (My Files), and the per-transfer "+25%"/"Cancel" buttons all fire zero network requests when clicked (see BUG006). Once these are wired to the existing endpoints above, the core SEND -> Inbox -> Conversation workflow should work.
+Data-quality note found in testing: transfer records created via the API come back with fileName: null, sizeBytes: 0, and direction: null even though a valid fileId was supplied - the transfer isn't populating these fields from the linked file record.
+Robustness note: sending a malformed/incorrectly-shaped body to POST /d-vault/transfers or POST /d-vault/transfers/{id}/progress returns a raw 500 "Something went wrong" instead of a 400 validation error - these endpoints don't validate input defensively.
+
+BUG002
+Title: Dashboard crashes blank after visiting Notifications/My Files then Dashboard
+Severity: Critical
+Details: Console error confirmed: "Uncaught TypeError: (v.data ?? []).filter is not a function". A paginated API response (e.g. /d-vault/notifications?page=0&size=50) likely returns an envelope object ({content, page, size, totalElements}) instead of a bare array. A Dashboard widget reads the same cached query key expecting a plain array and calls .filter() directly on the wrapper object, throwing during render. No error boundary catches it, so the whole page goes blank. Only a manual refresh (clears client cache) fixes it. Reproduces by navigating Notifications (or another paginated list) then Dashboard.
+
+BUG003
+Title: OTP and email sent as URL query parameters on login
+Severity: High (security)
+Details: Login request is POST /d-vault/auth/login/verify-otp?email=...&otp=... - both the email and the one-time code are in the URL query string instead of the request body. This can be captured in server access logs, proxy logs, and browser history.
+
+BUG004
+Title: Internal engineering scaffolding leaks into the live product UI
+Severity: High
+Details: The Shared and Search screens render literal internal text: "Backend status is sourced from docs/audit/FEATURE_MATRIX.md - this screen becomes functional automatically once the feature's status flips to available." This is dev/engineering audit tooling exposed directly to logged-in end users, not end-user-facing copy.
+
+BUG005
+Title: "+New thread" (Conversations) is a dead button
+Severity: Medium
+Details: Clicking "+ New thread" fires no network request at all and produces no visible change. Conversation creation cannot be tested.
+
+BUG006
+Title: All Transfers screen controls are dead buttons ("+New transfer", "+25%", "Cancel")
+Severity: Critical (upgraded - this is the missing link for BUG001)
+Details: Clicking "+ New transfer" fires no network request and produces no visible change. Same for the per-row "+25%" progress button and "Cancel" button - confirmed via network log that none of these three controls ever call the backend, even though all three corresponding endpoints work correctly when called directly (POST /d-vault/transfers, POST /d-vault/transfers/{id}/progress, POST /d-vault/transfers/{id}/cancel - see BUG001). This is pure frontend event-handler wiring, not a backend gap.
+
+BUG007
+Title: AI Assistant Send button and suggestion chips do nothing
+Severity: Medium
+Details: Clicking a suggestion chip ("Find my contracts", etc.) or typing a question and clicking Send fires no network request and adds nothing to the chat log, despite the screen's own copy claiming a "deterministic assistant" answers questions.
+
+BUG008
+Title: Notification bell icon opens no dropdown/panel
+Severity: Medium
+Details: Clicking the bell icon in the header produces no visible panel and no new network request - dead button.
+
+BUG009
+Title: Nav bar requires horizontal scrolling even with free space available
+Severity: Medium (UX/layout)
+Details: The top nav overflows its container and needs an internal horizontal scrollbar to reach Devices/Storage/etc, even at 1440px viewport width, while there is visible empty space in the header before the Enterprise dropdown on the right.
+
+BUG010
+Title: "Planned" checkbox accessibility state does not match actual state
+Severity: Low (accessibility)
+Details: After toggling the "Planned" checkbox, the real DOM checked property differs from what the accessibility tree reports, so screen readers would announce the wrong state.
+
+BUG011
+Title: Same account shows two different display names
+Severity: Low
+Details: Dashboard greets "Good Afternoon, Srm Rao" while the Activity log attributes actions to "Sree Rao" for the same logged-in account (srm.rao@gmail.com). Confirmed via API: an uploaded file's stored path is "users/10_Sree_Rao/files/test.txt" - the real stored first/last name is "Sree Rao". The Dashboard greeting is titlecasing the email local-part ("srm.rao" -> "Srm Rao") instead of reading the actual profile name.
+
+BUG012
+Title: Redundant duplicate polling on nearly every screen
+Severity: Low (performance)
+Details: /d-vault/notifications/unread-count fires 3-6 times per single page load; /d-vault/transfers/active fired 4 times back-to-back on one screen visit. Unnecessary backend load from duplicate calls.
+
+BUG013
+Title: Enterprise/Business/Personal edition selector has almost no functional effect
+Severity: Low (UX)
+Details: Switching edition only changes the text label on the Profile page ("___ edition"). No nav item, screen, or permission actually changes, even though Settings states "Real edition comes from your tenant" - implying this control is a preview/debug toggle sitting in the primary nav rather than a real setting.

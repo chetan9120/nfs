@@ -13,11 +13,19 @@ import {
 
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_HASH_ROUNDS = 12;
+const DEVICE_TYPES = ['WEB', 'DESKTOP', 'MOBILE'] as const;
+type DeviceTypeValue = (typeof DEVICE_TYPES)[number];
 
 export const authRouter = Router();
 
 function isValidEmail(email: unknown): email is string {
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function resolveDeviceType(deviceType: unknown): DeviceTypeValue {
+  return typeof deviceType === 'string' && (DEVICE_TYPES as readonly string[]).includes(deviceType)
+    ? (deviceType as DeviceTypeValue)
+    : 'WEB';
 }
 
 async function issueTokensForDevice(userId: string, deviceId: string) {
@@ -59,7 +67,7 @@ async function claimPendingInvites(userId: string, email: string): Promise<void>
 }
 
 authRouter.post('/register', async (req, res) => {
-  const { email, password, displayName, deviceName } = req.body ?? {};
+  const { email, password, displayName, deviceName, deviceType } = req.body ?? {};
 
   if (!isValidEmail(email)) {
     res.status(400).json({ error: 'Valid email is required' });
@@ -88,7 +96,11 @@ authRouter.post('/register', async (req, res) => {
   await claimPendingInvites(user.id, email);
 
   const device = await prisma.device.create({
-    data: { userId: user.id, name: typeof deviceName === 'string' ? deviceName : 'Unknown device', type: 'WEB' },
+    data: {
+      userId: user.id,
+      name: typeof deviceName === 'string' ? deviceName : 'Unknown device',
+      type: resolveDeviceType(deviceType),
+    },
   });
 
   const tokens = await issueTokensForDevice(user.id, device.id);
@@ -101,7 +113,7 @@ authRouter.post('/register', async (req, res) => {
 });
 
 authRouter.post('/login', async (req, res) => {
-  const { email, password, deviceName } = req.body ?? {};
+  const { email, password, deviceName, deviceType } = req.body ?? {};
 
   if (!isValidEmail(email) || typeof password !== 'string') {
     res.status(400).json({ error: 'email and password are required' });
@@ -117,7 +129,11 @@ authRouter.post('/login', async (req, res) => {
   }
 
   const device = await prisma.device.create({
-    data: { userId: user.id, name: typeof deviceName === 'string' ? deviceName : 'Unknown device', type: 'WEB' },
+    data: {
+      userId: user.id,
+      name: typeof deviceName === 'string' ? deviceName : 'Unknown device',
+      type: resolveDeviceType(deviceType),
+    },
   });
 
   const tokens = await issueTokensForDevice(user.id, device.id);

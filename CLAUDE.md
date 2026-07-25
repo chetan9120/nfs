@@ -1,4 +1,4 @@
-# NFS — Narvee File Share OS
+# NFS — Next File Share OS
 ## Project Context for Claude Code
 
 This file is the persistent context for this project. Read it before making any architectural or feature decisions. Every feature built in this repo must stay consistent with the vision below.
