@@ -328,8 +328,7 @@ filesRouter.get('/files/:fileId/download', requireAuth, async (req: Authenticate
     return;
   }
 
-  const location = file.locations.find((l: FileLocation) => l.provider === 'LOCAL_DISK');
-  if (!location) {
+const location = file.locations.find((l: (typeof file.locations)[number]) => l.provider === 'LOCAL_DISK');  if (!location) {
     res.status(404).json({ error: 'File content not available' });
     return;
   }
