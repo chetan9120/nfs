@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/requireAuth.js';
 import { emitToUsers } from '../realtime/socket.js';
 import { storageKeyForHash, storageProvider } from '../storage/index.js';
-import type { FileLocation } from '@prisma/client';
+
 
 const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE_BYTES } });
